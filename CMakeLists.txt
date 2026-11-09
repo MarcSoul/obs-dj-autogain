@@ -1,0 +1,23 @@
+cmake_minimum_required(VERSION 3.20)
+project(obs-dj-autogain VERSION 0.2.0 LANGUAGES CXX)
+
+option(BUILD_OBS_PLUGIN "Build the OBS filter using libobs" ON)
+include(CTest)
+
+if(BUILD_OBS_PLUGIN)
+    find_package(libobs CONFIG REQUIRED)
+    add_library(obs-dj-autogain MODULE plugin.cpp)
+    target_compile_features(obs-dj-autogain PRIVATE cxx_std_17)
+    target_link_libraries(obs-dj-autogain PRIVATE OBS::libobs)
+    if(MSVC)
+        target_compile_options(obs-dj-autogain PRIVATE /utf-8)
+        target_compile_definitions(obs-dj-autogain PRIVATE NOMINMAX)
+    endif()
+    set_target_properties(obs-dj-autogain PROPERTIES PREFIX "")
+endif()
+
+if(BUILD_TESTING)
+    add_executable(test-autogain test_autogain.cpp)
+    target_compile_features(test-autogain PRIVATE cxx_std_17)
+    add_test(NAME dj-autogain-dsp COMMAND test-autogain)
+endif()
