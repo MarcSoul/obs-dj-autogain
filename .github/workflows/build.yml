@@ -1,0 +1,108 @@
+name: Build DJ AutoGain
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: g++ -std=c++17 -Wall -Wextra -Werror -O2 test_autogain.cpp -o /tmp/dj-autogain-test
+      - run: /tmp/dj-autogain-test
+
+  package:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2022
+            preset: windows-x64
+          - os: macos-15
+            preset: macos
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: obsproject/obs-plugintemplate
+          ref: 3e7d7ac3b5342cd7d9b88890b9c70b472d1520fc
+          path: .obs-template
+          persist-credentials: false
+      - uses: lukka/get-cmake@v3.30.5
+        with:
+          cmakeVersion: '3.30.5'
+      - name: Prepare source tree
+        shell: bash
+        run: |
+          version=0.2.0
+          if [[ "${GITHUB_REF_TYPE}" == tag ]]; then version="${GITHUB_REF_NAME#v}"; fi
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          echo "PLUGIN_VERSION=$version" >> "$GITHUB_ENV"
+          python3 packaging/prepare-template.py .obs-template "$version"
+      - name: Build plugin
+        working-directory: .obs-template
+        shell: bash
+        run: |
+          cmake --preset "${{ matrix.preset }}"
+          cmake --build --preset "${{ matrix.preset }}" --config Release
+      - name: Package Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $dll = Get-ChildItem .obs-template/build_x64 -Recurse -Filter obs-dj-autogain.dll |
+            Where-Object { $_.FullName -match '[\\/]Release[\\/]' } | Select-Object -First 1
+          if (-not $dll) { throw "Plugin DLL not found" }
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup --yes }
+          New-Item -ItemType Directory -Force dist | Out-Null
+          & $iscc "/DPluginDll=$($dll.FullName)" "/DPluginVersion=$env:PLUGIN_VERSION" "/O$pwd\dist" packaging/windows.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Package macOS universal plugin
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          plugin="$(find .obs-template/build_macos -type d -name 'obs-dj-autogain.plugin' -path '*/Release/*' -print -quit)"
+          test -n "$plugin"
+          lipo "$plugin/Contents/MacOS/obs-dj-autogain" -verify_arch arm64 x86_64
+          mkdir -p dist
+          ditto -c -k --keepParent "$plugin" "dist/obs-dj-autogain-$PLUGIN_VERSION-macos-universal.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: obs-dj-autogain-${{ matrix.preset }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'push' && github.ref == 'refs/heads/main' && github.event.head_commit.message == 'Publish DJ AutoGain v0.2.0')
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: obs-dj-autogain-*
+          merge-multiple: true
+          path: dist
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLUGIN_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '0.2.0' }}
+        run: |
+          tag="v${PLUGIN_VERSION#v}"
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            gh release create "$tag" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag \
+              --prerelease --title "DJ AutoGain $tag" --notes-file packaging/release-notes.md
+          else
+            gh release create "$tag" dist/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --prerelease --title "DJ AutoGain $tag" --notes-file packaging/release-notes.md
+          fi

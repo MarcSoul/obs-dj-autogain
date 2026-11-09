@@ -38,6 +38,19 @@ mide picos de muestra. Una intervención frecuente del limitador puede
 cambiar la pegada. El clipping previo en la mesa o interfaz ya forma parte
 de la señal y queda fuera del alcance del filtro.
 
+## Instalación
+
+Los paquetes se publican en [GitHub Releases](https://github.com/MarcSoul/obs-dj-autogain/releases).
+Cierra OBS antes de instalar.
+
+- **Windows x64**. Ejecuta el instalador `.exe`.
+- **macOS (Apple Silicon e Intel)**. Extrae el ZIP y copia el paquete
+  `.plugin` a `~/Library/Application Support/obs-studio/plugins/`.
+  El paquete está sin notarizar.
+
+Vuelve a abrir OBS y añade **DJ AutoGain** en los filtros de la fuente de
+audio de la mesa o controladora.
+
 ## Compilación
 
 Se necesita CMake 3.20 o posterior, un compilador C++17 y el SDK o paquete de
@@ -65,7 +78,6 @@ cmake --build build-dsp --config Release
 ctest --test-dir build-dsp -C Release --output-on-failure
 ```
 
-El ZIP contiene el código fuente. Se ejecutaron pruebas del motor a 44,1 y
-48 kHz con subidas sostenidas, picos, silencios y señales sintéticas que
-simulan camas e intros. La compilación de un instalador, la carga en OBS
-y la escucha con un set real están pendientes.
+Se ejecutaron pruebas del motor a 44,1 y 48 kHz con subidas sostenidas,
+picos, silencios y señales sintéticas que simulan camas e intros. La carga
+en OBS y la escucha con un set real están pendientes.
