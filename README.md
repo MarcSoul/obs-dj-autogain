@@ -27,6 +27,15 @@ los límites de ganancia en dB y el tiempo de subida, pero adoptan los
 nuevos valores iniciales para los controles que cambian de métrica.
 **Aplicar preset DJ Live** vuelve a los valores de fábrica del filtro.
 
+## Medidor compacto
+
+Abre **Paneles → DJ AutoGain — Medidor LUFS** para ver únicamente el
+**LUFS Short-Term de salida** en una tarjeta grande. Puedes acoplarla
+junto al mezclador o dejarla flotante. Si hay varios filtros DJ AutoGain,
+el selector permite elegir la fuente de este panel de forma independiente.
+Funciona también con **Solo medir**. El guion aparece cuando aún no hay una
+lectura válida o la fuente deja de entregar audio.
+
 ## Qué mide el panel
 
 | Indicador | Lectura |

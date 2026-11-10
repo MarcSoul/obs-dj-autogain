@@ -4,6 +4,7 @@
 #include "autogain.hpp"
 
 #include <QComboBox>
+#include <QFrame>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPainter>
@@ -44,6 +45,7 @@ std::mutex registry_mutex;
 std::vector<Filter *> registry;
 int next_id = 1;
 constexpr auto dock_id = "marcsoul-dj-autogain";
+constexpr auto meter_dock_id = "marcsoul-dj-autogain-meter";
 
 struct Control {
     const char *key;
@@ -278,6 +280,112 @@ private:
     std::deque<dj::Reading> readings;
 };
 
+// Called with registry_mutex held. The reading mutex protects last_audio.
+bool receiving_audio(const Filter &filter)
+{
+    return std::chrono::steady_clock::now() - filter.last_audio < std::chrono::seconds(1);
+}
+
+Filter *selected_filter(const QComboBox &sources)
+{
+    const int id = sources.currentData().toInt();
+    const auto found = std::find_if(registry.begin(), registry.end(),
+        [id](const Filter *f) { return f->id == id; });
+    return found == registry.end() ? nullptr : *found;
+}
+
+void refresh_sources(QComboBox &sources)
+{
+    bool rebuild = sources.count() != static_cast<int>(registry.size());
+    for (int i = 0; !rebuild && i < sources.count(); ++i)
+        rebuild = sources.itemData(i).toInt() != registry[i]->id || sources.itemText(i) != registry[i]->label;
+    if (!rebuild)
+        return;
+
+    const int id = sources.currentData().toInt();
+    sources.clear();
+    for (auto *f : registry)
+        sources.addItem(f->label, f->id);
+    const int previous = sources.findData(id);
+    if (previous >= 0)
+        sources.setCurrentIndex(previous);
+}
+
+class CompactMeter : public QWidget {
+public:
+    CompactMeter()
+    {
+        auto *layout = new QVBoxLayout(this);
+        layout->setContentsMargins(6, 6, 6, 6);
+        layout->setSpacing(4);
+        sources.setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+        sources.setMinimumContentsLength(8);
+        sources.setAccessibleName(QStringLiteral("Fuente del medidor LUFS"));
+        sources.hide();
+        layout->addWidget(&sources);
+
+        auto *card = new QFrame(this);
+        card->setObjectName(QStringLiteral("djAutoGainMeterCard"));
+        card->setStyleSheet(QStringLiteral(
+            "QFrame#djAutoGainMeterCard { background: palette(base); "
+            "border: 1px solid palette(mid); border-radius: 8px; }"));
+        auto *reading_layout = new QVBoxLayout(card);
+        reading_layout->setContentsMargins(10, 6, 10, 6);
+        reading_layout->setSpacing(0);
+        auto *caption = new QLabel(QStringLiteral("SALIDA · LUFS-S"), card);
+        caption->setAlignment(Qt::AlignCenter);
+        value.setAlignment(Qt::AlignCenter);
+        value.setAccessibleName(QStringLiteral("Sonoridad Short-Term de salida"));
+        QFont font = value.font();
+        font.setPointSize(32);
+        font.setBold(true);
+        value.setFont(font);
+        reading_layout->addWidget(&value);
+        reading_layout->addWidget(caption);
+        layout->addWidget(card);
+        layout->addStretch();
+
+        connect(&timer, &QTimer::timeout, this, [this] { refresh(); });
+        timer.start(100);
+    }
+
+private:
+    void refresh()
+    {
+        if (!isVisible())
+            return;
+
+        float loudness = dj::no_signal;
+        QString description = QStringLiteral("Añade el filtro DJ AutoGain a una fuente de audio.");
+        {
+            const std::lock_guard<std::mutex> lock(registry_mutex);
+            refresh_sources(sources);
+            if (auto *f = selected_filter(sources)) {
+                const std::lock_guard<std::mutex> reading_lock(f->reading_mutex);
+                if (f->unsupported.load())
+                    description = QStringLiteral("Se requiere una fuente mono o estéreo.");
+                else if (!receiving_audio(*f))
+                    description = QStringLiteral("Sin audio reciente.");
+                else if (!f->reading.ready)
+                    description = QStringLiteral("Esperando la primera ventana de 3 s.");
+                else if (f->reading.out_s == dj::no_signal)
+                    description = QStringLiteral("Sin nivel medible.");
+                else {
+                    loudness = f->reading.out_s;
+                    description = QStringLiteral("%1 · Sonoridad de salida de los últimos 3 s.").arg(f->label);
+                }
+            }
+        }
+        sources.setVisible(sources.count() > 1);
+        value.setText(level(loudness));
+        setToolTip(description);
+    }
+
+    QComboBox sources;
+    QLabel value{QStringLiteral("—")};
+    QTimer timer;
+};
+
 class Dock : public QWidget {
 public:
     Dock()
@@ -318,12 +426,12 @@ public:
 
         connect(&freeze, &QPushButton::clicked, this, [this] {
             const std::lock_guard<std::mutex> lock(registry_mutex);
-            if (auto *f = selected())
+            if (auto *f = selected_filter(sources))
                 freeze_hotkey(f, 0, nullptr, true);
         });
         connect(&reset, &QPushButton::clicked, this, [this] {
             const std::lock_guard<std::mutex> lock(registry_mutex);
-            if (auto *f = selected())
+            if (auto *f = selected_filter(sources))
                 f->reset.store(true);
             history.clear();
         });
@@ -334,7 +442,7 @@ public:
             obs_source_t *source = nullptr;
             {
                 const std::lock_guard<std::mutex> lock(registry_mutex);
-                if (auto *f = selected())
+                if (auto *f = selected_filter(sources))
                     source = obs_source_get_ref(f->source);
             }
             if (!source)
@@ -353,13 +461,6 @@ public:
     }
 
 private:
-    Filter *selected() const
-    {
-        const int id = sources.currentData().toInt();
-        const auto found = std::find_if(registry.begin(), registry.end(), [id](const Filter *f) { return f->id == id; });
-        return found == registry.end() ? nullptr : *found;
-    }
-
     void refresh()
     {
         if (!isVisible())
@@ -367,25 +468,15 @@ private:
         dj::Reading r;
         bool held = false, unsupported = false, available = false, receiving = false;
         double latency = 0;
-        int id = sources.currentData().toInt();
+        int id = 0;
         {
             const std::lock_guard<std::mutex> lock(registry_mutex);
-            bool rebuild = sources.count() != static_cast<int>(registry.size());
-            for (int i = 0; !rebuild && i < sources.count(); ++i)
-                rebuild = sources.itemData(i).toInt() != registry[i]->id || sources.itemText(i) != registry[i]->label;
-            if (rebuild) {
-                sources.clear();
-                for (auto *f : registry)
-                    sources.addItem(f->label, f->id);
-                const int previous = sources.findData(id);
-                if (previous >= 0)
-                    sources.setCurrentIndex(previous);
-            }
+            refresh_sources(sources);
             id = sources.currentData().toInt();
-            if (auto *f = selected()) {
+            if (auto *f = selected_filter(sources)) {
                 const std::lock_guard<std::mutex> reading_lock(f->reading_mutex);
                 r = f->reading;
-                receiving = std::chrono::steady_clock::now() - f->last_audio < std::chrono::seconds(1);
+                receiving = receiving_audio(*f);
                 available = true;
                 latency = f->latency;
                 held = f->freeze.load();
@@ -453,11 +544,15 @@ bool obs_module_load(void)
     auto *dock = new Dock;
     if (!obs_frontend_add_dock_by_id(dock_id, "DJ AutoGain", dock))
         delete dock;
+    auto *meter = new CompactMeter;
+    if (!obs_frontend_add_dock_by_id(meter_dock_id, "DJ AutoGain — Medidor LUFS", meter))
+        delete meter;
     return true;
 }
 
 void obs_module_unload(void)
 {
+    obs_frontend_remove_dock(meter_dock_id);
     obs_frontend_remove_dock(dock_id);
 }
 
