@@ -1,14 +1,16 @@
 cmake_minimum_required(VERSION 3.20)
-project(obs-dj-autogain VERSION 0.2.0 LANGUAGES CXX)
+project(obs-dj-autogain VERSION 0.3.0 LANGUAGES CXX)
 
 option(BUILD_OBS_PLUGIN "Build the OBS filter using libobs" ON)
 include(CTest)
 
 if(BUILD_OBS_PLUGIN)
     find_package(libobs CONFIG REQUIRED)
+    find_package(obs-frontend-api CONFIG REQUIRED)
+    find_package(Qt6 REQUIRED COMPONENTS Widgets)
     add_library(obs-dj-autogain MODULE plugin.cpp)
     target_compile_features(obs-dj-autogain PRIVATE cxx_std_17)
-    target_link_libraries(obs-dj-autogain PRIVATE OBS::libobs)
+    target_link_libraries(obs-dj-autogain PRIVATE OBS::libobs OBS::obs-frontend-api Qt6::Widgets)
     if(MSVC)
         target_compile_options(obs-dj-autogain PRIVATE /utf-8)
         target_compile_definitions(obs-dj-autogain PRIVATE NOMINMAX)

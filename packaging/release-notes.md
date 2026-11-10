@@ -1,8 +1,11 @@
-DJ AutoGain nivela el audio de una mesa o controladora DJ en OBS Studio. Corrige las subidas sostenidas, puede levantar un tema que se mantiene bajo y protege frente a picos de muestra. Aplica la misma ganancia a ambos canales.
+DJ AutoGain 0.3.0 sustituye la referencia RMS por un objetivo Short-Term en LUFS. El nuevo panel muestra entrada y salida en LUFS-M/S/I, historial, True Peak, reducción del limitador, latencia y guías de sonoridad.
 
-- **Windows x64**. Cierra OBS, ejecuta el instalador y vuelve a abrir OBS.
-- **macOS universal (Apple Silicon e Intel)**. Cierra OBS, extrae el ZIP y copia `obs-dj-autogain.plugin` a `~/Library/Application Support/obs-studio/plugins/`. El paquete está sin notarizar.
+- **DJ Live** parte de −16 LUFS-S con una zona de −18 a −14 y un techo de −2 dBTP. Es un perfil orientativo del plugin.
+- **Protección de camas**. Separa la recuperación de atenuación de la amplificación de temas bajos. Permite congelar la ganancia desde el panel o con un atajo.
+- **Limitador True Peak**. Estimación 4× y anticipación fija. El panel muestra el retardo introducido.
 
-Añade **DJ AutoGain** en los filtros de la fuente de audio de tu mesa. La subida de ganancia se limita por defecto a +3 dB y espera unos 10 segundos de señal elegible. Una cama musical larga puede superar ese criterio si tiene suficiente nivel.
+Cierra OBS antes de instalar. En Windows x64 ejecuta el instalador. En macOS, extrae el ZIP y copia el paquete universal a `~/Library/Application Support/obs-studio/plugins/`. El paquete de macOS está sin notarizar.
 
-Esta versión preliminar incluye pruebas del motor con señales sintéticas. La evaluación con un set real sigue pendiente.
+Al volver a abrir OBS añade el filtro a tu fuente de audio y abre **Paneles → DJ AutoGain**.
+
+Versión preliminar. Se incluyen pruebas sintéticas a 44,1 y 48 kHz. La escucha con un set real y la validación completa con señales EBU están pendientes.

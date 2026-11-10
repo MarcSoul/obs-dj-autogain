@@ -26,7 +26,7 @@ if(MSVC)
   target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE NOMINMAX)
 endif()"""), encoding="utf-8")
 
-for filename in ("plugin.cpp", "autogain.hpp"):
+for filename in ("plugin.cpp", "autogain.hpp", "loudness.hpp"):
     shutil.copy2(root / filename, template / "src" / filename)
 shutil.rmtree(template / "data", ignore_errors=True)
 (template / "data").mkdir()
