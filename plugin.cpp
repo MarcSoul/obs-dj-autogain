@@ -327,6 +327,56 @@ void refresh_sources(QComboBox &sources)
         sources.setCurrentIndex(previous);
 }
 
+class OutputPeakMeter : public QWidget {
+public:
+    OutputPeakMeter()
+    {
+        setFixedWidth(30);
+        setAccessibleName(QStringLiteral("Pico verdadero de salida"));
+        setToolTip(QStringLiteral("Pico verdadero de salida (dBTP) · verde hasta −12, ámbar hasta −3 y rojo por encima."));
+    }
+
+    void setPeak(float peak)
+    {
+        if (peak == displayed)
+            return;
+        displayed = peak;
+        update();
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        const QRectF track(2, 5, 7, height() - 20);
+        const auto y = [&](float db) {
+            return track.bottom() - (std::clamp(db, -48.0f, 0.0f) + 48) / 48 * track.height();
+        };
+        painter.fillRect(track, palette().mid());
+        const float current = std::clamp(displayed, -48.0f, 0.0f);
+        const auto fill = [&](float low, float high, const QColor &color) {
+            if (current > low)
+                painter.fillRect(QRectF(track.left(), y(std::min(current, high)),
+                                       track.width(), y(low) - y(std::min(current, high))), color);
+        };
+        fill(-48, -12, QColor(46, 194, 148));
+        fill(-12, -3, QColor(244, 180, 68));
+        fill(-3, 0, QColor(244, 90, 100));
+
+        QFont scale = font();
+        scale.setPixelSize(9);
+        painter.setFont(scale);
+        painter.setPen(palette().text().color());
+        for (int tick : {0, -12, -24, -48})
+            painter.drawText(QRectF(11, y(tick) - 5, 19, 10), Qt::AlignVCenter, QString::number(tick));
+        painter.drawText(QRectF(0, height() - 12, width(), 12), Qt::AlignCenter, QStringLiteral("dBTP"));
+    }
+
+private:
+    float displayed = dj::no_signal;
+};
+
 class CompactMeter : public QWidget {
 public:
     CompactMeter()
@@ -362,7 +412,11 @@ public:
         reading_layout->addWidget(caption);
         layout->addWidget(card);
         history.setToolTip(QStringLiteral("Últimos 30 s · lo más reciente arriba · más sonoridad a la derecha."));
-        layout->addWidget(&history, 1);
+        auto *meters = new QHBoxLayout;
+        meters->setSpacing(4);
+        meters->addWidget(&history, 1);
+        meters->addWidget(&peak_meter);
+        layout->addLayout(meters, 1);
 
         connect(&timer, &QTimer::timeout, this, [this] { refresh(); });
         timer.start(100);
@@ -401,6 +455,8 @@ private:
                 id = f->id;
                 reading.target = f->reading.target;
                 reading.band = f->reading.band;
+                if (!f->unsupported.load() && receiving_audio(*f))
+                    reading.peak = f->reading.peak;
                 if (f->unsupported.load())
                     description = QStringLiteral("Se requiere una fuente mono o estéreo.");
                 else if (!receiving_audio(*f))
@@ -417,6 +473,7 @@ private:
         }
         sources.setVisible(sources.count() > 1);
         value.setText(level(reading.out_s));
+        peak_meter.setPeak(reading.peak);
         if (id != history_source) {
             history.clear();
             history_source = id;
@@ -429,6 +486,7 @@ private:
     QComboBox sources;
     QLabel value{QStringLiteral("—")};
     History history{true};
+    OutputPeakMeter peak_meter;
     int history_source = 0;
     QTimer timer;
 };

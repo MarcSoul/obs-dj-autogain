@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(obs-dj-autogain VERSION 0.3.2 LANGUAGES CXX)
+project(obs-dj-autogain VERSION 0.3.3 LANGUAGES CXX)
 
 option(BUILD_OBS_PLUGIN "Build the OBS filter using libobs" ON)
 include(CTest)
