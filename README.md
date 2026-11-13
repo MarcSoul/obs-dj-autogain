@@ -30,7 +30,9 @@ nuevos valores iniciales para los controles que cambian de métrica.
 ## Medidor compacto
 
 Abre **Paneles → DJ AutoGain — Medidor LUFS** para ver únicamente el
-**LUFS Short-Term de salida** en una tarjeta grande. Puedes acoplarla
+**LUFS Short-Term de salida** en una tarjeta con cifra adaptable. Debajo,
+el historial vertical muestra los últimos 30 s, con la lectura más
+reciente arriba y la zona objetivo sombreada. Puedes acoplarla
 junto al mezclador o dejarla flotante. Si hay varios filtros DJ AutoGain,
 el selector permite elegir la fuente de este panel de forma independiente.
 Funciona también con **Solo medir**. El guion aparece cuando aún no hay una

@@ -5,6 +5,10 @@
 
 #include <QComboBox>
 #include <QFrame>
+#include <QFontMetrics>
+#include <QHideEvent>
+#include <QResizeEvent>
+#include <QSizePolicy>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPainter>
@@ -233,7 +237,11 @@ QString status(const dj::Reading &r)
 
 class History : public QWidget {
 public:
-    History() { setMinimumHeight(96); setAccessibleName(QStringLiteral("Historial de sonoridad")); }
+    explicit History(bool vertical = false) : vertical(vertical)
+    {
+        setMinimumHeight(vertical ? 72 : 96);
+        setAccessibleName(QStringLiteral("Historial de sonoridad"));
+    }
 
     void add(const dj::Reading &r)
     {
@@ -253,21 +261,28 @@ protected:
         if (readings.empty())
             return;
 
-        auto y = [this](float lu) { return height() * (-6 - std::clamp(lu, -40.0f, -6.0f)) / 34; };
+        auto loudness_position = [](float lu) { return (std::clamp(lu, -40.0f, -6.0f) + 40) / 34; };
+        auto point_at = [&](double time, float lu) {
+            const auto position = loudness_position(lu);
+            return vertical ? QPointF(position * width(), (1 - time) * (height() - 1))
+                            : QPointF(time * width(), (1 - position) * height());
+        };
         const auto &latest = readings.back();
-        const auto top = y(latest.target + latest.band);
-        const auto bottom = y(latest.target - latest.band);
-        painter.fillRect(QRectF(0, top, width(), bottom - top), QColor(45, 160, 140, 45));
+        const QRectF band(point_at(0, latest.target - latest.band),
+                          point_at(1, latest.target + latest.band));
+        painter.fillRect(band.normalized(), QColor(45, 160, 140, 45));
 
         painter.setRenderHint(QPainter::Antialiasing);
-        for (int trace = 0; trace < 3; ++trace) {
+        const int first_trace = vertical ? 1 : 0;
+        const int end_trace = vertical ? 2 : 3;
+        for (int trace = first_trace; trace < end_trace; ++trace) {
             painter.setPen(QPen(trace == 0 ? QColor(135, 145, 160) : trace == 1 ? QColor(50, 170, 145) : QColor(230, 160, 70), 1.5));
             QPointF previous;
             bool valid = false;
             for (size_t i = 0; i < readings.size(); ++i) {
                 const auto &r = readings[i];
                 const float value = trace == 0 ? r.in_s : trace == 1 ? r.out_s : -20 + r.gain;
-                const QPointF point(width() * (300.0 - readings.size() + i) / 299, y(value));
+                const QPointF point = point_at((300.0 - readings.size() + i) / 299, value);
                 if (valid && value != dj::no_signal)
                     painter.drawLine(previous, point);
                 valid = value != dj::no_signal;
@@ -277,6 +292,7 @@ protected:
     }
 
 private:
+    const bool vertical;
     std::deque<dj::Reading> readings;
 };
 
@@ -337,31 +353,54 @@ public:
         value.setAlignment(Qt::AlignCenter);
         value.setAccessibleName(QStringLiteral("Sonoridad Short-Term de salida"));
         QFont font = value.font();
-        font.setPointSize(32);
+        font.setPixelSize(64);
         font.setBold(true);
         value.setFont(font);
+        value.setMinimumHeight(72);
+        value.setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
         reading_layout->addWidget(&value);
         reading_layout->addWidget(caption);
         layout->addWidget(card);
-        layout->addStretch();
+        history.setToolTip(QStringLiteral("Últimos 30 s · lo más reciente arriba · más sonoridad a la derecha."));
+        layout->addWidget(&history, 1);
 
         connect(&timer, &QTimer::timeout, this, [this] { refresh(); });
         timer.start(100);
     }
 
 private:
+    void resizeEvent(QResizeEvent *event) override
+    {
+        QWidget::resizeEvent(event);
+        QFont font = value.font();
+        font.setPixelSize(64);
+        const int required = QFontMetrics(font).horizontalAdvance(QStringLiteral("-119.9"));
+        font.setPixelSize(std::clamp(64 * (width() - 34) / required, 14, 64));
+        value.setFont(font);
+    }
+
+    void hideEvent(QHideEvent *event) override
+    {
+        history.clear();
+        QWidget::hideEvent(event);
+    }
+
     void refresh()
     {
         if (!isVisible())
             return;
 
-        float loudness = dj::no_signal;
+        dj::Reading reading;
+        int id = 0;
         QString description = QStringLiteral("Añade el filtro DJ AutoGain a una fuente de audio.");
         {
             const std::lock_guard<std::mutex> lock(registry_mutex);
             refresh_sources(sources);
             if (auto *f = selected_filter(sources)) {
                 const std::lock_guard<std::mutex> reading_lock(f->reading_mutex);
+                id = f->id;
+                reading.target = f->reading.target;
+                reading.band = f->reading.band;
                 if (f->unsupported.load())
                     description = QStringLiteral("Se requiere una fuente mono o estéreo.");
                 else if (!receiving_audio(*f))
@@ -371,18 +410,26 @@ private:
                 else if (f->reading.out_s == dj::no_signal)
                     description = QStringLiteral("Sin nivel medible.");
                 else {
-                    loudness = f->reading.out_s;
+                    reading.out_s = f->reading.out_s;
                     description = QStringLiteral("%1 · Sonoridad de salida de los últimos 3 s.").arg(f->label);
                 }
             }
         }
         sources.setVisible(sources.count() > 1);
-        value.setText(level(loudness));
+        value.setText(level(reading.out_s));
+        if (id != history_source) {
+            history.clear();
+            history_source = id;
+        }
+        if (id != 0)
+            history.add(reading);
         setToolTip(description);
     }
 
     QComboBox sources;
     QLabel value{QStringLiteral("—")};
+    History history{true};
+    int history_source = 0;
     QTimer timer;
 };
 
