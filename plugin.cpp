@@ -94,10 +94,32 @@ void defaults(obs_data_t *data)
     each_control([&](const Control &c) { obs_data_set_default_double(data, c.key, initial.*(c.member)); });
 }
 
+constexpr float platform_targets[] = {-16, -14, -16, -16, -23};
+
+bool mark_custom_settings(obs_properties_t *, obs_property_t *, obs_data_t *data)
+{
+    const auto preset = obs_data_get_int(data, "filter_preset");
+    if (preset < 4 || preset > 8 || preset != obs_data_get_int(data, "applied_platform_preset"))
+        return false;
+
+    dj::Settings expected;
+    expected.target = platform_targets[preset - 4];
+    bool changed = obs_data_get_bool(data, "meter_only") != obs_data_get_bool(data, "preset_meter_only");
+    each_control([&](const Control &c) {
+        changed |= std::abs(obs_data_get_double(data, c.key) - expected.*(c.member)) > 0.00001;
+    });
+    if (changed) {
+        obs_data_set_int(data, "filter_preset", 0);
+        obs_data_set_int(data, "applied_platform_preset", 0);
+    }
+    return changed;
+}
+
 void add_control(obs_properties_t *props, const Control &c)
 {
     auto *p = obs_properties_add_float_slider(props, c.key, c.label, c.min, c.max, c.step);
     obs_property_set_long_description(p, c.help);
+    obs_property_set_modified_callback(p, mark_custom_settings);
 }
 
 struct Guide { const char *title; const char *detail; float integrated_reference = dj::no_signal; };
@@ -113,14 +135,18 @@ constexpr Guide guides[] = {
 bool apply_filter_preset(obs_properties_t *, obs_property_t *, obs_data_t *data)
 {
     const auto preset = obs_data_get_int(data, "filter_preset");
-    constexpr float targets[] = {-16, -14, -16, -16, -23};
-    if (preset < 4 || preset > 8)
+    if (preset < 4 || preset > 8) {
+        obs_data_set_int(data, "applied_platform_preset", 0);
         return false;
+    }
+    if (preset == obs_data_get_int(data, "applied_platform_preset"))
+        return mark_custom_settings(nullptr, nullptr, data);
 
     dj::Settings settings;
-    settings.target = targets[preset - 4];
+    settings.target = platform_targets[preset - 4];
     each_control([&](const Control &c) { obs_data_set_double(data, c.key, settings.*(c.member)); });
-    obs_data_set_int(data, "filter_preset", 0);
+    obs_data_set_int(data, "applied_platform_preset", preset);
+    obs_data_set_bool(data, "preset_meter_only", obs_data_get_bool(data, "meter_only"));
     return true;
 }
 
@@ -136,9 +162,10 @@ obs_properties_t *properties(void *)
     for (size_t i = 0; i < sizeof(guides) / sizeof(guides[0]); ++i)
         obs_property_list_add_int(preset, guides[i].title, 4 + i);
     obs_property_set_long_description(preset,
-        "Aplica los ajustes del preset y vuelve a Personalizado. Spotify (−14), Apple Music (−16), AES (−16, música) y EBU (−23) usan esos valores como objetivos Short-Term del filtro. Las referencias de plataforma se expresan en sonoridad integrada.");
+        "La plataforma seleccionada se mantiene visible. Al cambiar un ajuste manualmente se muestra Personalizado. Spotify (−14), Apple Music (−16), AES (−16, música) y EBU (−23) usan esos valores como objetivos Short-Term del filtro. Las referencias de plataforma se expresan en sonoridad integrada.");
 
     auto *meter = obs_properties_add_bool(props, "meter_only", "Solo medir");
+    obs_property_set_modified_callback(meter, mark_custom_settings);
     obs_property_set_long_description(meter,
         "Mide la entrada y la salida sin corregir el nivel ni limitar picos. El filtro conserva su latencia para facilitar la comparación.");
 
