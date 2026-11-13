@@ -1,3 +1,3 @@
-El medidor compacto incorpora una barra vertical de pico verdadero de salida (dBTP) junto al historial LUFS-S. Disponible en **Paneles → DJ AutoGain — Medidor LUFS**.
+El medidor compacto dibuja la cifra LUFS-S a gran tamaño según el espacio disponible. El filtro incorpora presets y un botón de ayuda con la descripción de cada ajuste.
 
 El paquete macOS universal está sin notarizar.

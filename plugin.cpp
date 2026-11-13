@@ -5,6 +5,9 @@
 
 #include <QComboBox>
 #include <QFrame>
+#include <QMessageBox>
+#include <QTextDocumentFragment>
+#include <QApplication>
 #include <QFontMetrics>
 #include <QHideEvent>
 #include <QResizeEvent>
@@ -100,12 +103,58 @@ void add_control(obs_properties_t *props, const Control &c)
     obs_property_set_long_description(p, c.help);
 }
 
+bool apply_filter_preset(obs_properties_t *, obs_property_t *, obs_data_t *data)
+{
+    const auto preset = obs_data_get_int(data, "filter_preset");
+    if (preset < 1 || preset > 3)
+        return false;
+
+    dj::Settings settings;
+    if (preset == 2) {
+        settings.max_boost = 0;
+        settings.band = 3;
+    }
+    each_control([&](const Control &c) { obs_data_set_double(data, c.key, settings.*(c.member)); });
+    obs_data_set_bool(data, "meter_only", preset == 3);
+    obs_data_set_int(data, "filter_preset", 0);
+    return true;
+}
+
+bool show_filter_help(obs_properties_t *, obs_property_t *, void *)
+{
+    QString help = QStringLiteral(
+        "<h3>Presets y modo de trabajo</h3>"
+        "<p>El selector aplica los valores del preset al instante y vuelve a Personalizado para permitir ajustes manuales.</p>"
+        "<p><b>DJ Live:</b> busca −16 LUFS-S con una tolerancia de ±2 LU. "
+        "<b>DJ Live · Solo atenuar:</b> amplía la tolerancia a ±3 LU y limita la subida a 0 dB. "
+        "<b>Solo medir:</b> muestra la sonoridad con la misma latencia del filtro y sin corrección.</p>"
+        "<p>Las guías de plataformas del panel son referencias de sonoridad.</p>"
+        "<h3>Ajustes básicos y avanzados</h3>");
+    each_control([&](const Control &c) {
+        help += QStringLiteral("<p><b>%1</b><br>%2</p>")
+            .arg(QString::fromUtf8(c.label).toHtmlEscaped(), QString::fromUtf8(c.help).toHtmlEscaped());
+    });
+    QMessageBox dialog(QMessageBox::Information, QStringLiteral("Ayuda de DJ AutoGain"),
+        QStringLiteral("Pulsa Mostrar detalles para consultar cada control."),
+        QMessageBox::Ok, QApplication::activeWindow());
+    dialog.setDetailedText(QTextDocumentFragment::fromHtml(help).toPlainText());
+    dialog.exec();
+    return false;
+}
+
 obs_properties_t *properties(void *)
 {
     auto *props = obs_properties_create();
     obs_properties_add_text(props, "guide",
         "Aplica este filtro al audio de tu mesa. Abre Paneles → DJ AutoGain para ver la sonoridad, la ganancia y las guías. "
         "Modo Solo medir conserva la latencia y permite comparar el procesamiento.", OBS_TEXT_INFO);
+    auto *preset = obs_properties_add_list(props, "filter_preset", "Preset", OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
+    obs_property_list_add_int(preset, "Personalizado", 0);
+    obs_property_list_add_int(preset, "DJ Live", 1);
+    obs_property_list_add_int(preset, "DJ Live · Solo atenuar", 2);
+    obs_property_list_add_int(preset, "Solo medir", 3);
+    obs_property_set_modified_callback(preset, apply_filter_preset);
+    obs_properties_add_button(props, "filter_help", "? Ayuda de los controles", show_filter_help);
     obs_properties_add_bool(props, "meter_only", "Solo medir");
     for (const auto &c : basic)
         add_control(props, c);
@@ -377,6 +426,46 @@ private:
     float displayed = dj::no_signal;
 };
 
+class LoudnessValue : public QWidget {
+public:
+    LoudnessValue()
+    {
+        setMinimumHeight(72);
+        setAccessibleName(QStringLiteral("Sonoridad Short-Term de salida"));
+    }
+
+    void setText(const QString &text)
+    {
+        if (reading == text)
+            return;
+        reading = text;
+        setAccessibleDescription(text + QStringLiteral(" LUFS-S"));
+        update();
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter painter(this);
+        painter.setPen(palette().text().color());
+        QFont digits = font();
+        digits.setBold(true);
+        const auto area = rect().adjusted(0, 2, 0, -2);
+        for (int size = area.height(); size > 0; --size) {
+            digits.setPixelSize(size);
+            const QFontMetrics metrics(digits);
+            if (metrics.height() <= area.height() &&
+                metrics.horizontalAdvance(reading) <= area.width())
+                break;
+        }
+        painter.setFont(digits);
+        painter.drawText(area, Qt::AlignCenter, reading);
+    }
+
+private:
+    QString reading{QStringLiteral("—")};
+};
+
 class CompactMeter : public QWidget {
 public:
     CompactMeter()
@@ -396,18 +485,10 @@ public:
             "QFrame#djAutoGainMeterCard { background: palette(base); "
             "border: 1px solid palette(mid); border-radius: 8px; }"));
         auto *reading_layout = new QVBoxLayout(card);
-        reading_layout->setContentsMargins(10, 6, 10, 6);
+        reading_layout->setContentsMargins(4, 6, 4, 6);
         reading_layout->setSpacing(0);
         auto *caption = new QLabel(QStringLiteral("SALIDA · LUFS-S"), card);
         caption->setAlignment(Qt::AlignCenter);
-        value.setAlignment(Qt::AlignCenter);
-        value.setAccessibleName(QStringLiteral("Sonoridad Short-Term de salida"));
-        QFont font = value.font();
-        font.setPixelSize(64);
-        font.setBold(true);
-        value.setFont(font);
-        value.setMinimumHeight(72);
-        value.setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
         reading_layout->addWidget(&value);
         reading_layout->addWidget(caption);
         layout->addWidget(card);
@@ -423,16 +504,6 @@ public:
     }
 
 private:
-    void resizeEvent(QResizeEvent *event) override
-    {
-        QWidget::resizeEvent(event);
-        QFont font = value.font();
-        font.setPixelSize(64);
-        const int required = QFontMetrics(font).horizontalAdvance(QStringLiteral("-119.9"));
-        font.setPixelSize(std::clamp(64 * (width() - 34) / required, 14, 64));
-        value.setFont(font);
-    }
-
     void hideEvent(QHideEvent *event) override
     {
         history.clear();
@@ -484,7 +555,7 @@ private:
     }
 
     QComboBox sources;
-    QLabel value{QStringLiteral("—")};
+    LoudnessValue value;
     History history{true};
     OutputPeakMeter peak_meter;
     int history_source = 0;
