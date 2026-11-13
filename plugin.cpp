@@ -96,15 +96,14 @@ void defaults(obs_data_t *data)
 
 void add_control(obs_properties_t *props, const Control &c)
 {
-    const auto label = QString::fromUtf8(c.label) + QStringLiteral("  ?");
-    auto *p = obs_properties_add_float_slider(props, c.key, label.toUtf8().constData(), c.min, c.max, c.step);
+    auto *p = obs_properties_add_float_slider(props, c.key, c.label, c.min, c.max, c.step);
     obs_property_set_long_description(p, c.help);
 }
 
 struct Guide { const char *title; const char *detail; float integrated_reference = dj::no_signal; };
 
 constexpr Guide guides[] = {
-    {"DJ Live · YouTube / Facebook", "Orientativo · −16 LUFS-S, zona −18 a −14 LUFS-S. Ajuste musical del plugin para directos. Techo recomendado del perfil: −2 dBTP."},
+    {"YouTube / Facebook", "Orientativo · −16 LUFS-S, zona −18 a −14 LUFS-S. Ajuste musical del plugin para directos. Techo recomendado del perfil: −2 dBTP."},
     {"Spotify", "Referencia oficial de reproducción · −14 LUFS integrados por defecto. Seleccionarla no cambia la ganancia.", -14},
     {"Apple Music", "Orientativo · −16 LUFS integrados. Apple documenta Sound Check, sin publicar ese objetivo como requisito.", -16},
     {"AES TD1008 · Radio online", "Recomendación técnica · −16 LUFS-I para música normalizada por pista; −18 LUFS-I para voz o contenido variado. −1 dBTP máximo a la entrada de códecs con pérdida."},
@@ -114,20 +113,13 @@ constexpr Guide guides[] = {
 bool apply_filter_preset(obs_properties_t *, obs_property_t *, obs_data_t *data)
 {
     const auto preset = obs_data_get_int(data, "filter_preset");
-    if (preset < 1 || preset > 8)
+    constexpr float targets[] = {-16, -14, -16, -16, -23};
+    if (preset < 4 || preset > 8)
         return false;
 
     dj::Settings settings;
-    if (preset == 2) {
-        settings.max_boost = 0;
-        settings.band = 3;
-    }
-    if (preset >= 4) {
-        constexpr float targets[] = {-16, -14, -16, -16, -23};
-        settings.target = targets[preset - 4];
-    }
+    settings.target = targets[preset - 4];
     each_control([&](const Control &c) { obs_data_set_double(data, c.key, settings.*(c.member)); });
-    obs_data_set_bool(data, "meter_only", preset == 3);
     obs_data_set_int(data, "filter_preset", 0);
     return true;
 }
@@ -140,16 +132,13 @@ obs_properties_t *properties(void *)
         "Modo Solo medir conserva la latencia y permite comparar el procesamiento.", OBS_TEXT_INFO);
     auto *preset = obs_properties_add_list(props, "filter_preset", "Preset", OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
     obs_property_list_add_int(preset, "Personalizado", 0);
-    obs_property_list_add_int(preset, "DJ Live", 1);
-    obs_property_list_add_int(preset, "DJ Live · Solo atenuar", 2);
-    obs_property_list_add_int(preset, "Solo medir", 3);
     obs_property_set_modified_callback(preset, apply_filter_preset);
     for (size_t i = 0; i < sizeof(guides) / sizeof(guides[0]); ++i)
         obs_property_list_add_int(preset, guides[i].title, 4 + i);
     obs_property_set_long_description(preset,
         "Aplica los ajustes del preset y vuelve a Personalizado. Spotify (−14), Apple Music (−16), AES (−16, música) y EBU (−23) usan esos valores como objetivos Short-Term del filtro. Las referencias de plataforma se expresan en sonoridad integrada.");
 
-    auto *meter = obs_properties_add_bool(props, "meter_only", "Solo medir  ?");
+    auto *meter = obs_properties_add_bool(props, "meter_only", "Solo medir");
     obs_property_set_long_description(meter,
         "Mide la entrada y la salida sin corregir el nivel ni limitar picos. El filtro conserva su latencia para facilitar la comparación.");
 
@@ -159,7 +148,7 @@ obs_properties_t *properties(void *)
     for (const auto &c : advanced)
         add_control(extra, c);
     obs_properties_add_group(props, "advanced", "Ajustes avanzados", OBS_GROUP_NORMAL, extra);
-    obs_properties_add_text(props, "credits", "Desarrollado por MarcSoul · marcsoul.com", OBS_TEXT_INFO);
+    obs_properties_add_text(props, "credits", "Desarrollado por MarcSoul · <a href=\"https://marcsoul.com\">marcsoul.com</a>", OBS_TEXT_INFO);
     return props;
 }
 
@@ -585,7 +574,6 @@ public:
         guidance.setWordWrap(true);
         layout->addWidget(&guidance);
         layout->addWidget(&guide_delta);
-        layout->addWidget(&preset);
         auto *credits = new QLabel(QStringLiteral("Desarrollado por MarcSoul · <a href=\"https://marcsoul.com\">marcsoul.com</a>"), this);
         credits->setOpenExternalLinks(true);
         credits->setWordWrap(true);
@@ -605,22 +593,6 @@ public:
         });
         connect(&reference, &QComboBox::currentIndexChanged, this, [this](int index) {
             guidance.setText(QString::fromUtf8(guides[index].detail));
-        });
-        connect(&preset, &QPushButton::clicked, this, [this] {
-            obs_source_t *source = nullptr;
-            {
-                const std::lock_guard<std::mutex> lock(registry_mutex);
-                if (auto *f = selected_filter(sources))
-                    source = obs_source_get_ref(f->source);
-            }
-            if (!source)
-                return;
-            auto *data = obs_source_get_settings(source);
-            each_control([&](const Control &c) { obs_data_unset_user_value(data, c.key); });
-            obs_data_unset_user_value(data, "meter_only");
-            obs_source_update(source, data);
-            obs_data_release(data);
-            obs_source_release(source);
         });
         guidance.setText(QString::fromUtf8(guides[0].detail));
         connect(&timer, &QTimer::timeout, this, [this] { refresh(); });
@@ -657,7 +629,6 @@ private:
         }
         freeze.setEnabled(available && !unsupported);
         reset.setEnabled(available && !unsupported);
-        preset.setEnabled(available && !unsupported);
         freeze.setText(held ? QStringLiteral("Reanudar") : QStringLiteral("Congelar"));
         primary.setText(available && receiving && !unsupported ? level(r.out_s) + QStringLiteral(" LUFS-S") : QStringLiteral("—"));
         target.setText(available ? QStringLiteral("Objetivo %1 · zona %2 a %3 LUFS-S")
@@ -684,8 +655,7 @@ private:
 
     QComboBox sources, reference;
     QLabel primary, target, state, detail, peaks, gain, guidance, guide_delta;
-    QPushButton freeze{QStringLiteral("Congelar")}, reset{QStringLiteral("Reiniciar estadísticas")},
-        preset{QStringLiteral("Aplicar preset DJ Live")};
+    QPushButton freeze{QStringLiteral("Congelar")}, reset{QStringLiteral("Reiniciar estadísticas")};
     History history;
     QTimer timer;
     int history_source = 0;
