@@ -5,9 +5,6 @@
 
 #include <QComboBox>
 #include <QFrame>
-#include <QMessageBox>
-#include <QTextDocumentFragment>
-#include <QApplication>
 #include <QFontMetrics>
 #include <QHideEvent>
 #include <QResizeEvent>
@@ -63,8 +60,8 @@ struct Control {
 };
 
 constexpr Control basic[] = {
-    {"target_lufs", "Objetivo Short-Term (LUFS-S)", &dj::Settings::target, -30, -8, 0.5f, "Centro de la zona de trabajo durante la música activa."},
-    {"band", "Tolerancia a cada lado (LU)", &dj::Settings::band, 0, 6, 0.5f, "Dentro de esta zona, el nivelador procura mantener la ganancia."},
+    {"target_lufs", "Objetivo Short-Term (LUFS-S)", &dj::Settings::target, -30, -8, 0.5f, "Objetivo de sonoridad sobre los últimos 3 segundos. Si eliges −16 LUFS-S con una tolerancia de ±2 LU, la zona de trabajo va de −18 a −14. Bajar el objetivo deja más margen para los picos."},
+    {"band", "Tolerancia a cada lado (LU)", &dj::Settings::band, 0, 6, 0.5f, "Define cuánto puede alejarse la lectura del objetivo antes de corregir. Aumenta la tolerancia para conservar más contraste entre pasajes suaves y fuertes."},
     {"boost", "Subida máxima (dB)", &dj::Settings::max_boost, 0, 6, 0.5f, "Con 0 dB se recupera la atenuación anterior, sin amplificar la señal."},
     {"cut", "Atenuación máxima (dB)", &dj::Settings::max_cut, 0, 24, 0.5f, "Límite del nivelador. El limitador de picos tiene prioridad."},
     {"true_peak", "Techo True Peak (dBTP)", &dj::Settings::ceiling, -8, -0.5f, 0.5f, "Límite estimado entre muestras. Se deja un margen interno de 0,2 dB."},
@@ -73,14 +70,14 @@ constexpr Control basic[] = {
 constexpr Control advanced[] = {
     {"floor_lufs", "Nivel mínimo de recuperación (LUFS-M)", &dj::Settings::floor, -45, -20, 0.5f, "Por debajo de este nivel no se recupera ni se añade ganancia."},
     {"gate_lufs", "Umbral de pausa por silencio (LUFS-M)", &dj::Settings::gate, -70, -35, 1, "Por debajo de este nivel se pausa el ajuste automático."},
-    {"boost_wait", "Espera antes de amplificar (s)", &dj::Settings::boost_wait, 1, 30, 0.5f, "Tiempo de música baja sostenida antes de superar 0 dB de ganancia."},
-    {"attack", "Atenuación normal (s)", &dj::Settings::attack, 0.5f, 10, 0.1f, "Constante de tiempo para corregir subidas de nivel medio."},
+    {"boost_wait", "Espera antes de amplificar (s)", &dj::Settings::boost_wait, 1, 30, 0.5f, "Exige que el nivel se mantenga bajo durante este tiempo antes de amplificar. Auméntalo si el filtro levanta intros, descansos o pasajes suaves."},
+    {"attack", "Atenuación normal (s)", &dj::Settings::attack, 0.5f, 10, 0.1f, "Controla la rapidez con que baja la ganancia cuando el nivel medio se mantiene alto. Un valor corto reacciona antes; uno largo suaviza los cambios."},
     {"overlap_lu", "Exceso para detectar un solape (LU)", &dj::Settings::overload, 2, 12, 0.5f, "Exceso del nivel momentáneo sobre el objetivo para activar la vía rápida."},
     {"overlap_hold", "Persistencia del exceso (s)", &dj::Settings::overlap_hold, 0.2f, 2, 0.1f, "Tiempo por encima del umbral antes de intervenir con rapidez."},
     {"fast_attack", "Atenuación rápida (s)", &dj::Settings::fast_attack, 0.1f, 2, 0.05f, "Constante de tiempo al corregir un solape."},
     {"recover_unity", "Recuperación hacia 0 dB (s)", &dj::Settings::recovery, 1, 30, 0.5f, "Constante para devolver la ganancia que se había quitado."},
     {"recovery", "Subida por encima de 0 dB (s)", &dj::Settings::boost_time, 3, 30, 0.5f, "Constante para amplificar un tema bajo después de la espera."},
-    {"limiter_release", "Liberación del limitador (s)", &dj::Settings::release, 0.03f, 1, 0.01f, "Tiempo de recuperación tras un pico. La anticipación es fija."},
+    {"limiter_release", "Liberación del limitador (s)", &dj::Settings::release, 0.03f, 1, 0.01f, "Determina cuánto tarda en volver el nivel después de limitar un pico. Un valor corto recupera antes; uno largo suaviza la recuperación, pero puede atenuar también el golpe siguiente. La anticipación es fija."},
 };
 
 template<class Callback> void each_control(Callback callback)
@@ -99,14 +96,25 @@ void defaults(obs_data_t *data)
 
 void add_control(obs_properties_t *props, const Control &c)
 {
-    auto *p = obs_properties_add_float_slider(props, c.key, c.label, c.min, c.max, c.step);
+    const auto label = QString::fromUtf8(c.label) + QStringLiteral("  ?");
+    auto *p = obs_properties_add_float_slider(props, c.key, label.toUtf8().constData(), c.min, c.max, c.step);
     obs_property_set_long_description(p, c.help);
 }
+
+struct Guide { const char *title; const char *detail; float integrated_reference = dj::no_signal; };
+
+constexpr Guide guides[] = {
+    {"DJ Live · YouTube / Facebook", "Orientativo · −16 LUFS-S, zona −18 a −14 LUFS-S. Ajuste musical del plugin para directos. Techo recomendado del perfil: −2 dBTP."},
+    {"Spotify", "Referencia oficial de reproducción · −14 LUFS integrados por defecto. Seleccionarla no cambia la ganancia.", -14},
+    {"Apple Music", "Orientativo · −16 LUFS integrados. Apple documenta Sound Check, sin publicar ese objetivo como requisito.", -16},
+    {"AES TD1008 · Radio online", "Recomendación técnica · −16 LUFS-I para música normalizada por pista; −18 LUFS-I para voz o contenido variado. −1 dBTP máximo a la entrada de códecs con pérdida."},
+    {"EBU R128 · Radio", "Recomendación técnica · −23 LUFS integrados en producción. La transmisión FM tiene su propia cadena de procesado y medición.", -23},
+};
 
 bool apply_filter_preset(obs_properties_t *, obs_property_t *, obs_data_t *data)
 {
     const auto preset = obs_data_get_int(data, "filter_preset");
-    if (preset < 1 || preset > 3)
+    if (preset < 1 || preset > 8)
         return false;
 
     dj::Settings settings;
@@ -114,32 +122,14 @@ bool apply_filter_preset(obs_properties_t *, obs_property_t *, obs_data_t *data)
         settings.max_boost = 0;
         settings.band = 3;
     }
+    if (preset >= 4) {
+        constexpr float targets[] = {-16, -14, -16, -16, -23};
+        settings.target = targets[preset - 4];
+    }
     each_control([&](const Control &c) { obs_data_set_double(data, c.key, settings.*(c.member)); });
     obs_data_set_bool(data, "meter_only", preset == 3);
     obs_data_set_int(data, "filter_preset", 0);
     return true;
-}
-
-bool show_filter_help(obs_properties_t *, obs_property_t *, void *)
-{
-    QString help = QStringLiteral(
-        "<h3>Presets y modo de trabajo</h3>"
-        "<p>El selector aplica los valores del preset al instante y vuelve a Personalizado para permitir ajustes manuales.</p>"
-        "<p><b>DJ Live:</b> busca −16 LUFS-S con una tolerancia de ±2 LU. "
-        "<b>DJ Live · Solo atenuar:</b> amplía la tolerancia a ±3 LU y limita la subida a 0 dB. "
-        "<b>Solo medir:</b> muestra la sonoridad con la misma latencia del filtro y sin corrección.</p>"
-        "<p>Las guías de plataformas del panel son referencias de sonoridad.</p>"
-        "<h3>Ajustes básicos y avanzados</h3>");
-    each_control([&](const Control &c) {
-        help += QStringLiteral("<p><b>%1</b><br>%2</p>")
-            .arg(QString::fromUtf8(c.label).toHtmlEscaped(), QString::fromUtf8(c.help).toHtmlEscaped());
-    });
-    QMessageBox dialog(QMessageBox::Information, QStringLiteral("Ayuda de DJ AutoGain"),
-        QStringLiteral("Pulsa Mostrar detalles para consultar cada control."),
-        QMessageBox::Ok, QApplication::activeWindow());
-    dialog.setDetailedText(QTextDocumentFragment::fromHtml(help).toPlainText());
-    dialog.exec();
-    return false;
 }
 
 obs_properties_t *properties(void *)
@@ -154,14 +144,22 @@ obs_properties_t *properties(void *)
     obs_property_list_add_int(preset, "DJ Live · Solo atenuar", 2);
     obs_property_list_add_int(preset, "Solo medir", 3);
     obs_property_set_modified_callback(preset, apply_filter_preset);
-    obs_properties_add_button(props, "filter_help", "? Ayuda de los controles", show_filter_help);
-    obs_properties_add_bool(props, "meter_only", "Solo medir");
+    for (size_t i = 0; i < sizeof(guides) / sizeof(guides[0]); ++i)
+        obs_property_list_add_int(preset, guides[i].title, 4 + i);
+    obs_property_set_long_description(preset,
+        "Aplica los ajustes del preset y vuelve a Personalizado. Spotify (−14), Apple Music (−16), AES (−16, música) y EBU (−23) usan esos valores como objetivos Short-Term del filtro. Las referencias de plataforma se expresan en sonoridad integrada.");
+
+    auto *meter = obs_properties_add_bool(props, "meter_only", "Solo medir  ?");
+    obs_property_set_long_description(meter,
+        "Mide la entrada y la salida sin corregir el nivel ni limitar picos. El filtro conserva su latencia para facilitar la comparación.");
+
     for (const auto &c : basic)
         add_control(props, c);
     auto *extra = obs_properties_create();
     for (const auto &c : advanced)
         add_control(extra, c);
     obs_properties_add_group(props, "advanced", "Ajustes avanzados", OBS_GROUP_NORMAL, extra);
+    obs_properties_add_text(props, "credits", "Desarrollado por MarcSoul · marcsoul.com", OBS_TEXT_INFO);
     return props;
 }
 
@@ -251,16 +249,6 @@ obs_audio_data *process(void *context, obs_audio_data *audio)
     }
     return audio;
 }
-
-struct Guide { const char *title; const char *detail; float integrated_reference = dj::no_signal; };
-
-constexpr Guide guides[] = {
-    {"DJ Live · YouTube / Facebook", "Orientativo · −16 LUFS-S, zona −18 a −14 LUFS-S. Ajuste musical del plugin para directos. Techo recomendado del perfil: −2 dBTP."},
-    {"Spotify", "Referencia oficial de reproducción · −14 LUFS integrados por defecto. Seleccionarla no cambia la ganancia.", -14},
-    {"Apple Music", "Orientativo · −16 LUFS integrados. Apple documenta Sound Check, sin publicar ese objetivo como requisito.", -16},
-    {"AES TD1008 · Radio online", "Recomendación técnica · −16 LUFS-I para música normalizada por pista; −18 LUFS-I para voz o contenido variado. −1 dBTP máximo a la entrada de códecs con pérdida."},
-    {"EBU R128 · Radio", "Recomendación técnica · −23 LUFS integrados en producción. La transmisión FM tiene su propia cadena de procesado y medición.", -23},
-};
 
 QString level(float value)
 {
@@ -598,6 +586,10 @@ public:
         layout->addWidget(&guidance);
         layout->addWidget(&guide_delta);
         layout->addWidget(&preset);
+        auto *credits = new QLabel(QStringLiteral("Desarrollado por MarcSoul · <a href=\"https://marcsoul.com\">marcsoul.com</a>"), this);
+        credits->setOpenExternalLinks(true);
+        credits->setWordWrap(true);
+        layout->addWidget(credits);
         layout->addStretch();
 
         connect(&freeze, &QPushButton::clicked, this, [this] {
