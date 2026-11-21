@@ -2,6 +2,7 @@
 #include <obs-frontend-api.h>
 
 #include "autogain.hpp"
+#include "presets.hpp"
 
 #include <QComboBox>
 #include <QFrame>
@@ -62,12 +63,14 @@ struct Control {
 constexpr Control basic[] = {
     {"target_lufs", "Objetivo Short-Term (LUFS-S)", &dj::Settings::target, -30, -8, 0.5f, "Objetivo de sonoridad sobre los últimos 3 segundos. Si eliges −16 LUFS-S con una tolerancia de ±2 LU, la zona de trabajo va de −18 a −14. Bajar el objetivo deja más margen para los picos."},
     {"band", "Tolerancia a cada lado (LU)", &dj::Settings::band, 0, 6, 0.5f, "Define cuánto puede alejarse la lectura del objetivo antes de corregir. Aumenta la tolerancia para conservar más contraste entre pasajes suaves y fuertes."},
-    {"boost", "Subida máxima (dB)", &dj::Settings::max_boost, 0, 6, 0.5f, "Con 0 dB se recupera la atenuación anterior, sin amplificar la señal."},
+    {"boost", "Subida máxima (dB)", &dj::Settings::max_boost, 0, 12, 0.5f, "Con 0 dB se recupera la atenuación anterior, sin amplificar la señal."},
     {"cut", "Atenuación máxima (dB)", &dj::Settings::max_cut, 0, 24, 0.5f, "Límite del nivelador. El limitador de picos tiene prioridad."},
     {"true_peak", "Techo True Peak (dBTP)", &dj::Settings::ceiling, -8, -0.5f, 0.5f, "Límite estimado entre muestras. Se deja un margen interno de 0,2 dB."},
 };
 
 constexpr Control advanced[] = {
+    {"peak_drive", "Entrada adicional al limitador (dB)", &dj::Settings::peak_drive, 0, 6, 0.5f,
+     "Permite amplificar aun cuando falte margen de pico. Con 0 dB, el nivelador evita empujar más al limitador. Al aumentarlo se gana densidad a costa de dinámica. El techo True Peak sigue activo."},
     {"floor_lufs", "Nivel mínimo de recuperación (LUFS-M)", &dj::Settings::floor, -45, -20, 0.5f, "Por debajo de este nivel no se recupera ni se añade ganancia."},
     {"gate_lufs", "Umbral de pausa por silencio (LUFS-M)", &dj::Settings::gate, -70, -35, 1, "Por debajo de este nivel se pausa el ajuste automático."},
     {"boost_wait", "Espera antes de amplificar (s)", &dj::Settings::boost_wait, 1, 30, 0.5f, "Exige que el nivel se mantenga bajo durante este tiempo antes de amplificar. Auméntalo si el filtro levanta intros, descansos o pasajes suaves."},
@@ -94,16 +97,15 @@ void defaults(obs_data_t *data)
     each_control([&](const Control &c) { obs_data_set_default_double(data, c.key, initial.*(c.member)); });
 }
 
-constexpr float platform_targets[] = {-16, -14, -16, -16, -23};
 
 bool mark_custom_settings(obs_properties_t *, obs_property_t *, obs_data_t *data)
 {
     const auto preset = obs_data_get_int(data, "filter_preset");
-    if (preset < 4 || preset > 8 || preset != obs_data_get_int(data, "applied_platform_preset"))
+    const auto *profile = dj::find_preset(static_cast<int>(preset));
+    if (!profile || preset != obs_data_get_int(data, "applied_platform_preset"))
         return false;
 
-    dj::Settings expected;
-    expected.target = platform_targets[preset - 4];
+    const auto &expected = profile->settings;
     bool changed = obs_data_get_bool(data, "meter_only") != obs_data_get_bool(data, "preset_meter_only");
     each_control([&](const Control &c) {
         changed |= std::abs(obs_data_get_double(data, c.key) - expected.*(c.member)) > 0.00001;
@@ -122,28 +124,18 @@ void add_control(obs_properties_t *props, const Control &c)
     obs_property_set_modified_callback(p, mark_custom_settings);
 }
 
-struct Guide { const char *title; const char *detail; float integrated_reference = dj::no_signal; };
-
-constexpr Guide guides[] = {
-    {"YouTube / Facebook", "Orientativo · −16 LUFS-S, zona −18 a −14 LUFS-S. Ajuste musical del plugin para directos. Techo recomendado del perfil: −2 dBTP."},
-    {"Spotify", "Referencia oficial de reproducción · −14 LUFS integrados por defecto. Seleccionarla no cambia la ganancia.", -14},
-    {"Apple Music", "Orientativo · −16 LUFS integrados. Apple documenta Sound Check, sin publicar ese objetivo como requisito.", -16},
-    {"AES TD1008 · Radio online", "Recomendación técnica · −16 LUFS-I para música normalizada por pista; −18 LUFS-I para voz o contenido variado. −1 dBTP máximo a la entrada de códecs con pérdida."},
-    {"EBU R128 · Radio", "Recomendación técnica · −23 LUFS integrados en producción. La transmisión FM tiene su propia cadena de procesado y medición.", -23},
-};
-
 bool apply_filter_preset(obs_properties_t *, obs_property_t *, obs_data_t *data)
 {
     const auto preset = obs_data_get_int(data, "filter_preset");
-    if (preset < 4 || preset > 8) {
+    const auto *profile = dj::find_preset(static_cast<int>(preset));
+    if (!profile) {
         obs_data_set_int(data, "applied_platform_preset", 0);
         return false;
     }
     if (preset == obs_data_get_int(data, "applied_platform_preset"))
         return mark_custom_settings(nullptr, nullptr, data);
 
-    dj::Settings settings;
-    settings.target = platform_targets[preset - 4];
+    const auto &settings = profile->settings;
     each_control([&](const Control &c) { obs_data_set_double(data, c.key, settings.*(c.member)); });
     obs_data_set_int(data, "applied_platform_preset", preset);
     obs_data_set_bool(data, "preset_meter_only", obs_data_get_bool(data, "meter_only"));
@@ -159,10 +151,10 @@ obs_properties_t *properties(void *)
     auto *preset = obs_properties_add_list(props, "filter_preset", "Preset", OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
     obs_property_list_add_int(preset, "Personalizado", 0);
     obs_property_set_modified_callback(preset, apply_filter_preset);
-    for (size_t i = 0; i < sizeof(guides) / sizeof(guides[0]); ++i)
-        obs_property_list_add_int(preset, guides[i].title, 4 + i);
+    for (const auto &profile : dj::presets)
+        obs_property_list_add_int(preset, profile.title, profile.id);
     obs_property_set_long_description(preset,
-        "La plataforma seleccionada se mantiene visible. Al cambiar un ajuste manualmente se muestra Personalizado. Spotify (−14), Apple Music (−16), AES (−16, música) y EBU (−23) usan esos valores como objetivos Short-Term del filtro. Las referencias de plataforma se expresan en sonoridad integrada.");
+        "La plataforma seleccionada se mantiene visible. Al cambiar un ajuste manualmente se muestra Personalizado. Cada preset ajusta el objetivo Short-Term y el techo de pico. Radio distingue producción EBU y distribución online. Volumen máximo permite más limitación para escucha local. Las referencias integradas se consultan en el panel.");
 
     auto *meter = obs_properties_add_bool(props, "meter_only", "Solo medir");
     obs_property_set_modified_callback(meter, mark_custom_settings);
@@ -594,8 +586,8 @@ public:
         buttons->addWidget(&freeze);
         buttons->addWidget(&reset);
         layout->addLayout(buttons);
-        layout->addWidget(new QLabel(QStringLiteral("GUÍA DE SONORIDAD")));
-        for (const auto &guide : guides)
+        layout->addWidget(new QLabel(QStringLiteral("REFERENCIA DEL PRESET")));
+        for (const auto &guide : dj::presets)
             reference.addItem(QString::fromUtf8(guide.title));
         layout->addWidget(&reference);
         guidance.setWordWrap(true);
@@ -619,9 +611,9 @@ public:
             history.clear();
         });
         connect(&reference, &QComboBox::currentIndexChanged, this, [this](int index) {
-            guidance.setText(QString::fromUtf8(guides[index].detail));
+            guidance.setText(QString::fromUtf8(dj::presets[index].detail));
         });
-        guidance.setText(QString::fromUtf8(guides[0].detail));
+        guidance.setText(QString::fromUtf8(dj::presets[0].detail));
         connect(&timer, &QTimer::timeout, this, [this] { refresh(); });
         timer.start(100);
         refresh();
@@ -669,7 +661,7 @@ private:
             .arg(level(r.peak), level(r.max_peak), QString::number(latency, 'f', 2)) : QString());
         gain.setText(available ? QStringLiteral("Ganancia %1 dB · limitador −%2 dB\nLimitando: %3 % del tiempo")
             .arg(level(r.gain), level(r.limiting), QString::number(r.limited_percent, 'f', 1)) : QString());
-        const float guide = guides[reference.currentIndex()].integrated_reference;
+        const float guide = dj::presets[reference.currentIndex()].integrated_reference;
         guide_delta.setText(available && !unsupported && guide != dj::no_signal && r.out_i != dj::no_signal
             ? QStringLiteral("Salida integrada: %1 LU frente a la referencia").arg(level(r.out_i - guide))
             : QString());

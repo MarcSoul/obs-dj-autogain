@@ -22,6 +22,7 @@ struct Settings {
     float boost_time = 12;
     float ceiling = -2;
     float release = 0.1f;
+    float peak_drive = 0;
     bool meter_only = false;
 };
 
@@ -179,7 +180,7 @@ private:
         }
 
         if (desired > gain_db && in_peak > 0) {
-            const float allowed = gain_db + db(ceiling / in_peak);
+            const float allowed = gain_db + db(ceiling / in_peak) + settings.peak_drive;
             if (allowed < desired) {
                 desired = std::max(gain_db, allowed);
                 meters.state = State::NoHeadroom;

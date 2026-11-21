@@ -97,3 +97,22 @@ pendientes.
 Referencias: [ITU-R BS.1770-5](https://www.itu.int/rec/R-REC-BS.1770-5-202311-I/en),
 [EBU Tech 3341](https://tech.ebu.ch/publications/tech3341),
 [AES TD1008](https://aes.org/community/technical-council/technical-document-aestd1008/).
+
+## Presets de radio y grabación
+
+**Radio · Producción EBU R128** identifica la referencia de producción e
+intercambio de programas (−23 LUFS-I). **Radio online · Música (AES)** y
+**Radio online · Contenido variado (AES)** identifican referencias de
+distribución de −16 y −18 LUFS-I. Los objetivos del nivelador son
+Short-Term y el integrado real se verifica en el panel.
+
+**Grabación · Volumen máximo** propone −9 LUFS-S, tolerancia ±1 LU,
+techo −1 dBTP, subida máxima +12 dB y hasta 6 dB de entrada adicional al
+limitador. Es un perfil intenso para grabaciones de escucha local, con
+mayor reducción de dinámica. El nivel alcanzable depende de la señal.
+Conserva el umbral de camas y la espera antes de amplificar.
+
+Para preparar un CD de audio, exporta el resultado final a PCM estéreo
+44,1 kHz/16 bits y aplica dithering al reducir la profundidad de bits.
+El preset actúa sobre el audio dentro de OBS. No convierte el formato del
+archivo ni garantiza una sonoridad integrada determinada.

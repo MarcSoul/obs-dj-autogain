@@ -1,4 +1,5 @@
 #include "autogain.hpp"
+#include "presets.hpp"
 
 #include <cstdlib>
 #include <iostream>
@@ -98,6 +99,33 @@ void check(uint32_t rate)
         float *planes[] = {impulse.data()};
         dsp.process(planes, 1, static_cast<uint32_t>(impulse.size()));
         require(impulse[dsp.latency_frames()] == 0.5f && impulse[0] == 0, "Latency mismatch");
+    }
+    {
+        dj::AutoGain maximum(rate), conservative(rate);
+        const auto *profile = dj::find_preset(10);
+        require(profile != nullptr, "Maximum loudness preset missing");
+        maximum.configure(profile->settings);
+        dj::Settings safe = profile->settings;
+        safe.peak_drive = 0;
+        conservative.configure(safe);
+        std::array<float, 480> a{}, b{};
+        float *pa[] = {a.data()};
+        float *pb[] = {b.data()};
+        for (unsigned offset = 0; offset < rate * 45; offset += a.size()) {
+            for (size_t i = 0; i < a.size(); ++i) {
+                const auto frame = offset + i;
+                a[i] = 0.14f * std::cos(frame * (997.0 * 2 * pi / rate));
+                if (frame % (rate / 20) == 0)
+                    a[i] = 0.9f;
+            }
+            b = a;
+            maximum.process(pa, 1, a.size());
+            conservative.process(pb, 1, b.size());
+        }
+        const auto loud = maximum.reading(), quiet = conservative.reading();
+        require(loud.out_s > quiet.out_s + 0.5f, "Maximum preset did not raise peaky material");
+        require(loud.max_peak <= -0.95f, "Maximum preset exceeded True Peak ceiling");
+        require(loud.gain <= 12.01f, "Maximum preset exceeded gain limit");
     }
     std::cout << rate << " Hz passed\n";
 }
